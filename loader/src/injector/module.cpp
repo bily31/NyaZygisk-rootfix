@@ -596,6 +596,31 @@ bool abort_zygote_unmount(const std::vector<mount_info> &traces, uint32_t info_f
     // Protect /product overlays from direct zygote unmount.
     // Only /product/bin is safe to unmount (system binaries, not resource overlays).
     bool is_magisk = info_flags & PROCESS_ROOT_IS_MAGISK;
+
+    // Magisk can expose su through a tmpfs mounted over a system binary directory.
+    // On OnePlus/OxygenOS 11 that is /product/bin: detaching it from zygote also
+    // detaches su, so every process that does not reach the cached Root namespace
+    // loses root and Magisk reports itself as not installed. Keep the mounts that
+    // carry su in zygote; denylisted processes still get the fully cleaned
+    // namespace through MountNamespace::Clean.
+    if (is_magisk) {
+        static constexpr const char *kRootCriticalDirs[] = {
+            "/product/bin", "/system/bin", "/system/xbin", "/sbin", "/debug_ramdisk",
+        };
+        for (const auto &trace : traces) {
+            if (trace.source != "magisk") continue;
+            for (const char *dir : kRootCriticalDirs) {
+                size_t len = strlen(dir);
+                if (trace.target.compare(0, len, dir) == 0 &&
+                    (trace.target.size() == len || trace.target[len] == '/')) {
+                    LOGI("abort unmounting zygote: protecting Magisk su mount [%s]",
+                         trace.target.c_str());
+                    return true;
+                }
+            }
+        }
+    }
+
     bool has_product_overlay = std::any_of(traces.begin(), traces.end(), [&](const mount_info &trace) {
         if (trace.target.rfind("/product", 0) != 0) return false;
         if (trace.target.rfind("/product/bin", 0) == 0) return false;
