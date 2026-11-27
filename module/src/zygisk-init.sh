@@ -7,6 +7,20 @@ fi
 
 cd "$MODDIR"
 
+if [ -z "$KSU$APATCH" ] && [ -f "$MODDIR/sepolicy.rule" ]; then
+  MAGISKPOLICY=$(command -v magiskpolicy 2>/dev/null)
+  if [ -z "$MAGISKPOLICY" ] && [ -x "${MAGISKTMP:-/debug_ramdisk}/magiskpolicy" ]; then
+    MAGISKPOLICY="${MAGISKTMP:-/debug_ramdisk}/magiskpolicy"
+  fi
+  if [ -z "$MAGISKPOLICY" ] && [ -x /sbin/magiskpolicy ]; then
+    MAGISKPOLICY=/sbin/magiskpolicy
+  fi
+  if [ -n "$MAGISKPOLICY" ]; then
+    "$MAGISKPOLICY" --live --apply "$MODDIR/sepolicy.rule" >/dev/null 2>&1 || \
+      log -p w -t "zygisk-sh" "Failed to apply sepolicy.rule"
+  fi
+fi
+
 TMP_PATH=@WORK_DIRECTORY@
 
 # The work directory has to be traversable by uid 1000: a late-injected system_server
