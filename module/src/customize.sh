@@ -98,29 +98,16 @@ if [ "$KSU" ]; then
   ui_print "- Checking SELinux patches"
   if ! check_sepolicy "$TMPDIR/sepolicy.rule"; then
     ui_print "*********************************************************"
-    ui_print "! Unable to apply SELinux patches!"
-    ui_print "! Your kernel may not support SELinux patch fully"
+    ui_print "! ksud rejected our SELinux rules!"
+    ui_print "! Please report this along with your ksud version"
     abort    "*********************************************************"
   fi
-fi
-
-# Stop any running old monitor/tracer to prevent it from overwriting new module.prop during update
-if [ "$BOOTMODE" ]; then
-  for tracer_bin in \
-    /data/adb/modules/zygisksu/bin/zygisk-ptrace64 \
-    /data/adb/modules/zygisksu/bin/zygisk-ptrace32 \
-    "$MODPATH/bin/zygisk-ptrace64" \
-    "$MODPATH/bin/zygisk-ptrace32"; do
-    if [ -f "$tracer_bin" ]; then
-      "$tracer_bin" ctl exit >/dev/null 2>&1
-    fi
-  done
-  killall -9 zygisk-ptrace64 zygisk-ptrace32 >/dev/null 2>&1
 fi
 
 ui_print "- Extracting module files"
 extract "$ZIPFILE" 'module.prop'               "$MODPATH"
 extract "$ZIPFILE" 'spoof.prop'                "$MODPATH"
+extract "$ZIPFILE" 'spoof-props.sh'            "$MODPATH"
 extract "$ZIPFILE" 'post-fs-data.sh'           "$MODPATH"
 extract "$ZIPFILE" 'late-load.sh'              "$MODPATH"
 extract "$ZIPFILE" 'post-mount.sh'             "$MODPATH"
@@ -133,31 +120,27 @@ ui_print "- Extracting WebUI files"
 unzip -o "$ZIPFILE" "webroot/*" -x "*.sha256" -d "$MODPATH" >&2
 mv "$TMPDIR/sepolicy.rule" "$MODPATH"
 
-# Migrate WebUI config to /data/system/nyazygisk
-mkdir -p "/data/system/nyazygisk"
-chmod 755 "/data/system/nyazygisk"
-chcon u:object_r:system_file:s0 "/data/system/nyazygisk"
-chown system:system "/data/system/nyazygisk"
+WORK_DIR="@WORK_DIRECTORY@"
 
-if [ ! -f "/data/system/nyazygisk/config.prop" ]; then
-  if [ -f "/data/adb/nyazygisk/config.prop" ]; then
-    ui_print "- Migrating WebUI config from /data/adb/nyazygisk"
-    cp -af "/data/adb/nyazygisk/config.prop" "/data/system/nyazygisk/config.prop"
-  elif [ -f "/data/adb/modules/zygisksu/config.prop" ]; then
-    ui_print "- Migrating WebUI config from /data/adb/modules/zygisksu"
-    cp -af "/data/adb/modules/zygisksu/config.prop" "/data/system/nyazygisk/config.prop"
-  fi
+mkdir -p "$WORK_DIR"
+chmod 0550 "$WORK_DIR"
+chcon u:object_r:system_file:s0 "$WORK_DIR"
+chown system:system "$WORK_DIR"
+
+if [ -f "$WORK_DIR/config.prop" ]; then
+  chmod 0644 "$WORK_DIR/config.prop"
+  chcon u:object_r:system_file:s0 "$WORK_DIR/config.prop"
+  chown system:system "$WORK_DIR/config.prop"
 fi
 
-if [ -f "/data/system/nyazygisk/config.prop" ]; then
-  chmod 644 "/data/system/nyazygisk/config.prop"
-  chcon u:object_r:system_file:s0 "/data/system/nyazygisk/config.prop"
-  chown system:system "/data/system/nyazygisk/config.prop"
+if [ ! -f "$WORK_DIR/spoof.prop" ] && [ -f "$MODPATH/spoof.prop" ]; then
+  cp -af "$MODPATH/spoof.prop" "$WORK_DIR/spoof.prop"
 fi
 
-# Clean up legacy /data/adb/nyazygisk directory if present
-if [ -d "/data/adb/nyazygisk" ]; then
-  rm -rf "/data/adb/nyazygisk"
+if [ -f "$WORK_DIR/spoof.prop" ]; then
+  chmod 0600 "$WORK_DIR/spoof.prop"
+  chcon u:object_r:system_file:s0 "$WORK_DIR/spoof.prop"
+  chown root:root "$WORK_DIR/spoof.prop"
 fi
 
 mkdir "$MODPATH/bin"
@@ -199,21 +182,21 @@ set_perm_recursive "$MODPATH/bin" 0 0 0755 0755
 set_perm_recursive "$MODPATH/lib" 0 0 0755 0644 u:object_r:system_lib_file:s0
 set_perm_recursive "$MODPATH/lib64" 0 0 0755 0644 u:object_r:system_lib_file:s0
 set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644
+set_perm "$MODPATH/spoof.prop" 0 0 0600
 
 # If Huawei's Maple is enabled, system_server is created with a special way which is out of Zygisk's control
 HUAWEI_MAPLE_ENABLED=$(grep_prop ro.maple.enable)
-if [ "$HUAWEI_MAPLE_ENABLED" == "1" ]; then
+if [ "$HUAWEI_MAPLE_ENABLED" = "1" ]; then
   ui_print "- Add ro.maple.enable=0"
   echo "ro.maple.enable=0" >>"$MODPATH/system.prop"
 fi
 
-# NeoZygisk is binaries and scripts only, so none of what it installs waits for a boot
-# stage: hotinstall.sh replaces the running monitor and restarts zygote, which is all an
-# update needs. The Maple workaround above is the one exception. KernelSU loads a
-# system.prop from post-fs-data and from late load, but its hot-install path deliberately
-# loads none, so a build that wrote one has to take the reboot.
-if [ "$KSU" ] && [ ! -f "$MODPATH/system.prop" ]; then
-  ui_print "- Applying without a reboot"
+# Only hot-install on a temp-root (KSU_LATE_LOAD=1) fresh install where no previous
+# NyaZygisk session is running and no system.prop needs a boot stage. Any in-place
+# upgrade or persistent-root install requires a reboot so a fresh zygote maps the new
+# libzygisk.so cleanly alongside the new monitor and daemon.
+if [ "$KSU" ] && [ "$KSU_LATE_LOAD" = "1" ] && [ ! -d "/data/adb/modules/$MODID" ] && [ ! -f "$MODPATH/system.prop" ]; then
+  ui_print "- Temp-root fresh install: applying without a reboot"
   export MODULE_HOT_INSTALL_REQUEST=true
   export MODULE_HOT_RUN_SCRIPT=hotinstall.sh
 fi
