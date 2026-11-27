@@ -205,13 +205,13 @@ bool ZygoteAbiManager::rearm() {
     status_.supported = true;
 
     // libzygisk.so stays mapped in a zygote for its whole life -- the self-unmap only
-    // happens in a specialized child -- so its presence is a reliable injected marker here
-    // and makes a repeated rearm a no-op.
+    // happens in a specialized child -- so its presence is a reliable marker for skipping
+    // a repeated injection. It does not prove that the first attempt succeeded, because a
+    // failed injection leaves the library mapped too, so the status is not inferred from it.
     bool any_zygote_was_bare = false;
     for (auto pid : zygote_pids) {
         if (has_library_mapped(pid, "libzygisk.so")) {
-            LOGI("rearm: zygote (pid %d) is already injected, skipping", pid);
-            status_.zygote_injected = true;
+            LOGI("rearm: zygote (pid %d) already has libzygisk mapped, skipping", pid);
         } else {
             any_zygote_was_bare = true;
             attach_running(pid, "--standalone", "zygote");
@@ -222,16 +222,16 @@ bool ZygoteAbiManager::rearm() {
     // monitor never sees it, and a normal boot instead specializes it inside an
     // already-hooked zygote.
     //
-    // Gate it on having found a zygote without our hooks. An injected zygote means the
-    // system either booted normally or was already rearmed, and in both cases
-    // system_server has run server_specialize once already -- firing it a second time
-    // would re-enter every module's lifecycle. The library is not a usable marker for
-    // this: a normally specialized system_server unmaps it on the way out, so its absence
-    // cannot distinguish "never injected" from "injected and cleaned up".
+    // Gate it on having found a zygote without our library. A zygote that already has
+    // libzygisk.so mapped means the system either booted normally or was already rearmed,
+    // and in both cases system_server has run server_specialize once already -- firing it a
+    // second time would re-enter every module's lifecycle. The library is not a usable
+    // marker for this: a normally specialized system_server unmaps it on the way out, so
+    // its absence cannot distinguish "never injected" from "injected and cleaned up".
     if (system_server_pid == -1) {
         LOGI("rearm: no running system_server");
     } else if (!any_zygote_was_bare) {
-        LOGI("rearm: zygote was already injected, leaving system_server (pid %d) alone",
+        LOGI("rearm: zygote already had libzygisk mapped, leaving system_server (pid %d) alone",
              system_server_pid);
     } else {
         attach_running(system_server_pid, "--system_server", "system_server");
