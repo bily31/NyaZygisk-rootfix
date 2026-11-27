@@ -57,7 +57,7 @@ androidComponents.onVariants { variant ->
         into(moduleDir)
         from("${rootProject.projectDir}/README.md")
         from("$projectDir/src") {
-            exclude("module.prop", "customize.sh", "post-fs-data.sh", "late-load.sh", "post-mount.sh", "hotinstall.sh", "zygisk-init.sh", "service.sh", "uninstall.sh", "zygisk-ctl.sh")
+            exclude("module.prop", "customize.sh", "spoof-props.sh", "post-fs-data.sh", "late-load.sh", "post-mount.sh", "hotinstall.sh", "zygisk-init.sh", "service.sh", "uninstall.sh", "emulated-soft-reboot.sh")
             filter<FixCrLfFilter>("eol" to FixCrLfFilter.CrLf.newInstance("lf"))
         }
         from("$projectDir/src") {
@@ -71,7 +71,7 @@ androidComponents.onVariants { variant ->
             )
         }
         from("$projectDir/src") {
-            include("customize.sh", "post-fs-data.sh", "late-load.sh", "post-mount.sh", "hotinstall.sh", "zygisk-init.sh", "service.sh", "uninstall.sh", "zygisk-ctl.sh")
+            include("customize.sh", "spoof-props.sh", "post-fs-data.sh", "late-load.sh", "post-mount.sh", "hotinstall.sh", "zygisk-init.sh", "service.sh", "uninstall.sh", "emulated-soft-reboot.sh")
             val tokens = mapOf(
                 "DEBUG" to if (buildTypeLowered == "debug") "true" else "false",
                 "MIN_APATCH_VERSION" to "$minAPatchVersion",
@@ -90,9 +90,22 @@ androidComponents.onVariants { variant ->
         }
         into("lib") {
             from(project(":loader").layout.buildDirectory.dir("intermediates/stripped_native_libs/$variantLowered/strip${variantCapped}DebugSymbols/out/lib"))
+            include("**/libzygisk.so", "**/libzygisk_ptrace.so")
         }
 
         doLast {
+            // ksud before v1.0.1 parses sepolicy.rule strictly with no notion of
+            // comments: a '#' line reaches PolicyStatement::parse, fails, and aborts
+            // the install. No ksud ever reads them either way, since live_patch()
+            // parses non-strict, so the rationale stays in the source file and never
+            // ships. This runs before the hashes below are written.
+            val rule = moduleDir.get().file("sepolicy.rule").asFile
+            rule.writeText(
+                rule.readLines()
+                    .filterNot { it.isBlank() || it.trimStart().startsWith("#") }
+                    .joinToString(separator = "\n", postfix = "\n")
+            )
+
             fileTree(moduleDir).visit {
                 if (isDirectory) return@visit
                 val md = MessageDigest.getInstance("SHA-256")

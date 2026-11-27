@@ -27,7 +27,7 @@ using namespace std::string_view_literals;
 #ifdef WORK_DIRECTORY
 const char *const kWorkDirectory = STRINGIFY(WORK_DIRECTORY);
 #else
-const char *const kWorkDirectory = "/data/system/nyazygisk";
+const char *const kWorkDirectory = "/data/system_de/nyazygisk";
 #endif
 
 // Fills in the address of the monitor's control socket.
@@ -149,10 +149,11 @@ static volatile sig_atomic_t g_traced_pid = 0;
  * @brief Signal handler to safely detach and resume Zygote if the user
  *        interrupts the standalone tracer (e.g., Ctrl+C).
  */
-static void handle_interrupt(int sig) {
+static void handle_interrupt(int /*sig*/) {
     if (g_traced_pid > 0) {
-        printf("\n[!] received signal %d, safely detaching from PID %d to prevent crash...\n", sig,
-               (int) g_traced_pid);
+        static constexpr char msg[] =
+            "\n[!] received interrupt signal, detaching from tracee to prevent crash...\n";
+        (void) write(STDERR_FILENO, msg, sizeof(msg) - 1);
 
         // PTRACE_DETACH with SIGCONT ensures the process resumes execution
         ptrace(PTRACE_DETACH, (pid_t) g_traced_pid, 0, SIGCONT);
@@ -198,11 +199,23 @@ int main(int argc, char **argv) {
  *        Usage is typically printed in response to an error.
  * @param tool_name The name of the executable, typically argv[0].
  */
+static bool wait_for_monitor() {
+    constexpr int kRetries = 120;
+    constexpr useconds_t kRetryDelayUs = 25 * 1000;
+    for (int attempt = 0; attempt < kRetries; ++attempt) {
+        if (monitor_is_running()) {
+            return true;
+        }
+        usleep(kRetryDelayUs);
+    }
+    return false;
+}
+
 static void print_usage(const char *tool_name) {
     fprintf(stderr, "NyaZygisk Tracer %s\n", ZKSU_VERSION);
     fprintf(stderr,
             "usage: %s monitor | trace <pid> [--spawn | --standalone | --system_server] | ctl "
-            "<start|stop|exit|rearm> | version\n",
+            "<start|stop|exit|rearm|wait> | version\n",
             tool_name);
 }
 
@@ -314,12 +327,15 @@ static int handle_trace(int argc, char **argv) {
  */
 static int handle_ctl(int argc, char **argv) {
     if (argc < 3) {
-        fprintf(stderr, "error: ctl command requires an action (start|stop|exit|rearm)\n");
+        fprintf(stderr, "error: ctl command requires an action (start|stop|exit|rearm|wait)\n");
         print_usage(argv[0]);
         return EXIT_FAILURE;
     }
 
     const auto action = std::string_view(argv[2]);
+    if (action == "wait"sv) {
+        return wait_for_monitor() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     printf("sending control command: '%s'\n", argv[2]);
 
     Command cmd;

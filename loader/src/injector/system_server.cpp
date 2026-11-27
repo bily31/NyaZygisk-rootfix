@@ -44,7 +44,7 @@ public:
         jint env_res = vm_->GetEnv(reinterpret_cast<void**>(&env_), JNI_VERSION_1_6);
         if (env_res == JNI_EDETACHED) {
             LOGI("current thread is detached from JVM, attaching temporarily...");
-            JavaVMAttachArgs args{JNI_VERSION_1_6, "NyaZygisk-Injector", nullptr};
+            JavaVMAttachArgs args{JNI_VERSION_1_6, nullptr, nullptr};
             if (vm_->AttachCurrentThread(&env_, &args) == JNI_OK) {
                 attached_ = true;
             } else {
@@ -140,19 +140,21 @@ void* run_system_server_hooks(void*) {
     ServerSpecializeArgs_v1 args(uid, gid, gids, runtime_flags, permitted_capabilities,
                                  effective_capabilities);
     ZygiskContext ctx(env, &args);
+    ctx.child_process = true;
+
+    // The daemon hands Clean and Root namespace snapshots to specializing apps, and takes
+    // them from system_server before any module's preServerSpecialize mutates mounts.
+    zygiskd::CacheMountNamespace(getpid());
 
     // 4. Trigger the Zygisk API lifecycle
     LOGV("triggering server_specialize_pre");
     ctx.flags |= SERVER_FORK_AND_SPECIALIZE;
     ctx.server_specialize_pre();
 
-    // The daemon hands Clean and Root namespace snapshots to specializing apps, and takes
-    // them from system_server. A live system_server never unshares, so it is the same
-    // namespace nativeForkSystemServer_pre snapshots on the normal path.
-    zygiskd::CacheMountNamespace(getpid());
-
     LOGV("triggering server_specialize_post");
     ctx.server_specialize_post();
+
+    clean_linker_trace(zygiskd::GetTmpPath().data(), 1, 0, true);
 
     // 5. Clean up the local JNI reference to prevent memory leaks in the ART
     if (gids) {
