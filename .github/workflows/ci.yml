@@ -21,6 +21,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       # ====================================================================
@@ -130,6 +132,36 @@ jobs:
         with:
           name: debug-symbols
           path: zygiskd/build/symbols/debug/
+
+      - name: Publish GitHub Release
+        if: success() && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          RELEASE_ZIP: ${{ steps.prepare_artifacts.outputs.RELEASE_ZIP }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "$RELEASE_ZIP" ]; then
+            echo "::error::Release ZIP not found: $RELEASE_ZIP"
+            exit 1
+          fi
+
+          SHA256=$(sha256sum "$RELEASE_ZIP" | awk '{print $1}')
+          NOTES=$(printf 'Fork build based on upstream NyaZygisk v2.6-fix with the Magisk su mount protection fix.\n\nCommit: %s\nWorkflow: %s\n\nSHA-256: %s' \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}" \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            "$SHA256")
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$RELEASE_ZIP" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$RELEASE_ZIP" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "NyaZygisk $TAG" \
+              --notes "$NOTES"
+          fi
 
       - name: Publish artifacts to Telegram
         if: success() && github.event_name != 'pull_request'
