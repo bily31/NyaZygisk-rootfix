@@ -127,6 +127,20 @@ chmod 0550 "$WORK_DIR"
 chcon u:object_r:system_file:s0 "$WORK_DIR"
 chown system:system "$WORK_DIR"
 
+# Preserve settings from work directories used by earlier builds. Upstream v2.6-fix
+# dropped this migration, but the rootfix fork must not reset an existing install.
+for LEGACY_DIR in /data/system/nyazygisk /data/adb/nyazygisk; do
+  [ "$LEGACY_DIR" = "$WORK_DIR" ] && continue
+  if [ ! -f "$WORK_DIR/config.prop" ] && [ -f "$LEGACY_DIR/config.prop" ]; then
+    ui_print "- Migrating config.prop from $LEGACY_DIR"
+    cp -af "$LEGACY_DIR/config.prop" "$WORK_DIR/config.prop"
+  fi
+  if [ ! -f "$WORK_DIR/spoof.prop" ] && [ -f "$LEGACY_DIR/spoof.prop" ]; then
+    ui_print "- Migrating spoof.prop from $LEGACY_DIR"
+    cp -af "$LEGACY_DIR/spoof.prop" "$WORK_DIR/spoof.prop"
+  fi
+done
+
 if [ -f "$WORK_DIR/config.prop" ]; then
   chmod 0644 "$WORK_DIR/config.prop"
   chcon u:object_r:system_file:s0 "$WORK_DIR/config.prop"
